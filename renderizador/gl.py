@@ -49,9 +49,21 @@ class GL:
         print("Polypoint2D : colors = {0}".format(colors)) # imprime no terminal as cores
 
         # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 0])  # altera pixel (u, v, tipo, r, g, b)
+        coluna = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+
+        # ranges de RGB
+        r = int(max(0, min(255, round(coluna[0] * 255))))
+        g = int(max(0, min(255, round(coluna[1] * 255))))
+        b = int(max(0, min(255, round(coluna[2] * 255))))
+
+        i = 0 
+
+        while i < (len(point)//2):
+            x = int(round(point[2*i + 0]))
+            y = int(round(point[2*i + 1]))
+            if 0 <= x < GL.width and 0 <= y < GL.height:
+                gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, [r, g, b])
+            i += 1 
         # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
         
     @staticmethod
@@ -72,9 +84,55 @@ class GL:
         print("Polyline2D : colors = {0}".format(colors)) # imprime no terminal as cores
         
         # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 255])  # altera pixel (u, v, tipo, r, g, b)
+        coluna = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        r = int(max(0, min(255, round(coluna[0] * 255))))
+        g = int(max(0, min(255, round(coluna[1] * 255))))
+        b = int(max(0, min(255, round(coluna[2] * 255))))
+
+        if (len(lineSegments)//2) < 2:
+            return
+
+        i = 0 
+
+        while i < (len(lineSegments)//2) - 1:
+            x0 = int(round(lineSegments[2*i + 0]))
+            y0 = int(round(lineSegments[2*i + 1]))
+            x1 = int(round(lineSegments[2*(i+1) + 0]))
+            y1 = int(round(lineSegments[2*(i+1) + 1]))
+
+            dx = abs(x1 - x0)
+            dy = abs(y1 - y0)
+
+            if x0 < x1:
+                sx = 1
+            else:
+                sx = -1
+
+            if y0 < y1:
+                sy = 1
+            else:
+                sy = -1
+
+            err = dx - dy
+
+            while True:
+                if 0 <= x0 < GL.width and 0 <= y0 < GL.height:
+                    gpu.GPU.draw_pixel([x0, y0], gpu.GPU.RGB8, [r, g, b])
+
+                if x0 == x1 and y0 == y1:
+                    break
+
+                e2 = 2 * err
+
+                if e2 > -dy:
+                    err -= dy
+                    x0 += sx
+
+                if e2 < dx:
+                    err += dx
+                    y0 += sy
+
+            i += 1
         # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
 
     @staticmethod
@@ -111,8 +169,72 @@ class GL:
         print("TriangleSet2D : colors = {0}".format(colors)) # imprime no terminal as cores
 
         # Exemplo:
-        gpu.GPU.draw_pixel([6, 8], gpu.GPU.RGB8, [255, 255, 0])  # altera pixel (u, v, tipo, r, g, b)
+        coluna = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        R = int(max(0, min(255, round(coluna[0] * 255))))
+        G = int(max(0, min(255, round(coluna[1] * 255))))
+        B = int(max(0, min(255, round(coluna[2] * 255))))
 
+        if len(vertices) % 6 != 0:
+            return
+
+        for k in range(0, len(vertices), 6):
+            ax, ay = vertices[k + 0], vertices[k + 1]
+            bx, by = vertices[k + 2], vertices[k + 3]
+            cx, cy = vertices[k + 4], vertices[k + 5]
+
+            #box
+            x_min_calc = math.floor(min(ax, bx, cx))
+            x_max_calc = math.ceil (max(ax, bx, cx))
+            y_min_calc = math.floor(min(ay, by, cy))
+            y_max_calc = math.ceil (max(ay, by, cy))
+
+            if x_min_calc < 0:
+                x_min = 0
+            else:
+                x_min = x_min_calc
+            if x_max_calc > GL.width - 1:
+                x_max = GL.width - 1
+            else:
+                x_max = x_max_calc
+
+            if y_min_calc < 0:
+                y_min = 0
+            else:
+                y_min = y_min_calc
+            if y_max_calc > GL.height - 1:
+                y_max = GL.height - 1
+            else:
+                y_max = y_max_calc
+
+            # area orientada
+            area2 = (cx - ax) * (by - ay) - (cy - ay) * (bx - ax)
+            if area2 == 0:
+                continue
+            elif area2 > 0:
+                orient_positive = True
+            else:
+                orient_positive = False
+
+            y = y_min
+            while y <= y_max:
+                x = x_min
+                while x <= x_max:
+                    w0 = (x - bx) * (cy - by) - (y - by) * (cx - bx)
+                    w1 = (x - cx) * (ay - cy) - (y - cy) * (ax - cx)
+                    w2 = (x - ax) * (by - ay) - (y - ay) * (bx - ax)
+
+                    inside = False
+                    if orient_positive:
+                        if w0 >= 0 and w1 >= 0 and w2 >= 0:
+                            inside = True
+                    else:
+                        if w0 <= 0 and w1 <= 0 and w2 <= 0:
+                            inside = True
+
+                    if inside:
+                        gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, [R, G, B])
+                    x += 1
+                y += 1
 
     @staticmethod
     def triangleSet(point, colors):
