@@ -23,6 +23,11 @@ class GL:
     height = 600  # altura da tela
     near = 0.01   # plano de corte próximo
     far = 1000    # plano de corte distante
+    # matrizes globais
+    view_matrix = np.identity(4)
+    projection_matrix = np.identity(4)
+    transform_stack = []
+    z_buffer = None
 
     @staticmethod
     def setup(width, height, near=0.01, far=1000):
@@ -253,12 +258,84 @@ class GL:
         # (emissiveColor), conforme implementar novos materias você deverá suportar outros
         # tipos de cores.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("TriangleSet : pontos = {0}".format(point)) # imprime no terminal pontos
-        print("TriangleSet : colors = {0}".format(colors)) # imprime no terminal as cores
 
-        # Exemplo de desenho de um pixel branco na coordenada 10, 10
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        R = int(emissive[0] * 255)
+        G = int(emissive[1] * 255)
+        B = int(emissive[2] * 255)
+        rgb = [R, G, B]
+
+        w, h = GL.width, GL.height
+        if GL.z_buffer is None:
+            GL.z_buffer = np.full((h, w), GL.far, dtype=float)
+
+        i = 0
+        while i < len(point):
+            # --- Projeta os 3 vértices ---
+            verts = []
+            j = 0
+            while j < 3:
+                vx, vy, vz = point[i+3*j], point[i+3*j+1], point[i+3*j+2]
+                v = np.array([vx, vy, vz, 1.0])
+                if GL.transform_stack:
+                    v = GL.transform_stack[-1] @ v
+                v = GL.view_matrix @ v
+                v = GL.projection_matrix @ v
+                if v[3] != 0:
+                    v /= v[3]
+                sx = int((v[0] + 1) * w / 2)
+                sy = int((1 - v[1]) * h / 2)
+                sz = (v[2] + 1) / 2
+                verts.append([sx, sy, sz])
+                j += 1
+
+            # ordena vértices pelo y (de cima para baixo)
+            verts.sort(key=lambda v: v[1])
+            x0, y0, z0 = verts[0]
+            x1, y1, z1 = verts[1]
+            x2, y2, z2 = verts[2]
+
+            # --- varredura por linhas (scanline) ---
+            y = y0
+            while y <= y2:
+                if y < y1:  # parte superior
+                    if y1 != y0:
+                        xa = x0 + (x1-x0)*(y-y0)/(y1-y0)
+                        za = z0 + (z1-z0)*(y-y0)/(y1-y0)
+                    else:
+                        xa, za = x0, z0
+                    if y2 != y0:
+                        xb = x0 + (x2-x0)*(y-y0)/(y2-y0)
+                        zb = z0 + (z2-z0)*(y-y0)/(y2-y0)
+                    else:
+                        xb, zb = x0, z0
+                else:       # parte inferior
+                    if y2 != y1:
+                        xa = x1 + (x2-x1)*(y-y1)/(y2-y1)
+                        za = z1 + (z2-z1)*(y-y1)/(y2-y1)
+                    else:
+                        xa, za = x1, z1
+                    if y2 != y0:
+                        xb = x0 + (x2-x0)*(y-y0)/(y2-y0)
+                        zb = z0 + (z2-z0)*(y-y0)/(y2-y0)
+                    else:
+                        xb, zb = x0, z0
+
+                if xa > xb:  # garante que xa é o da esquerda
+                    xa, xb = xb, xa
+                    za, zb = zb, za
+
+                x = int(xa)
+                while x <= int(xb):
+                    z = za + (zb-za)*(x-xa)/(xb-xa) if xb != xa else za
+                    if 0 <= x < w and 0 <= y < h:
+                        if z < GL.z_buffer[y, x]:
+                            gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, rgb)
+                            GL.z_buffer[y, x] = z
+                    x += 1
+                y += 1
+
+            i += 9
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -268,10 +345,29 @@ class GL:
         # perspectiva para poder aplicar nos pontos dos objetos geométricos.
 
         # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Viewpoint : ", end='')
-        print("position = {0} ".format(position), end='')
-        print("orientation = {0} ".format(orientation), end='')
-        print("fieldOfView = {0} ".format(fieldOfView))
+
+
+        #posição da câmera
+        px, py, pz = position
+
+        #aqui vamos assumir que a câmera sempre olha para -Z e "cima" é Y
+        GL.view_matrix = np.identity(4)
+        GL.view_matrix[0, 3] = -px
+        GL.view_matrix[1, 3] = -py
+        GL.view_matrix[2, 3] = -pz
+
+        #matriz de projeção perspectiva 
+        aspecto = GL.width / GL.height
+        f = 1.0 / math.tan(fieldOfView / 2.0)
+
+        P = np.zeros((4, 4))
+        P[0, 0] = f / aspecto
+        P[1, 1] = f
+        P[2, 2] = (GL.far + GL.near) / (GL.near - GL.far)
+        P[2, 3] = (2 * GL.far * GL.near) / (GL.near - GL.far)
+        P[3, 2] = -1
+
+        GL.projection_matrix = P
 
     @staticmethod
     def transform_in(translation, scale, rotation):
@@ -288,14 +384,56 @@ class GL:
         # Você precisará usar alguma estrutura de dados pilha para organizar as matrizes.
 
         # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Transform : ", end='')
-        if translation:
-            print("translation = {0} ".format(translation), end='') # imprime no terminal
+        matriz = np.identity(4)
+
         if scale:
-            print("scale = {0} ".format(scale), end='') # imprime no terminal
+            sx, sy, sz = scale
+            matriz[0, 0] *= sx
+            matriz[1, 1] *= sy
+            matriz[2, 2] *= sz
+
+        # aplica rotação
         if rotation:
-            print("rotation = {0} ".format(rotation), end='') # imprime no terminal
-        print("")
+            eixo_x, eixo_y, eixo_z, ang = rotation
+            c = math.cos(ang)
+            s = math.sin(ang)
+
+            if eixo_x == 1 and eixo_y == 0 and eixo_z == 0:
+                rot = np.array([[1, 0, 0, 0],
+                                [0, c,-s, 0],
+                                [0, s, c, 0],
+                                [0, 0, 0, 1]])
+            elif eixo_x == 0 and eixo_y == 1 and eixo_z == 0:
+                rot = np.array([[ c, 0, s, 0],
+                                [ 0, 1, 0, 0],
+                                [-s, 0, c, 0],
+                                [ 0, 0, 0, 1]])
+            elif eixo_x == 0 and eixo_y == 0 and eixo_z == 1:
+                rot = np.array([[c,-s, 0, 0],
+                                [s, c, 0, 0],
+                                [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
+            else:
+                # caso não seja eixo puro
+                rot = np.identity(4) 
+
+            matriz = rot @ matriz
+
+        # aplica translação
+        if translation:
+            tx, ty, tz = translation
+            trans = np.identity(4)
+            trans[0, 3] = tx
+            trans[1, 3] = ty
+            trans[2, 3] = tz
+            matriz = trans @ matriz
+
+        # se já tem transformações anteriores acumula
+        if GL.transform_stack:
+            matriz = GL.transform_stack[-1] @ matriz
+
+        # empilha resultado
+        GL.transform_stack.append(matriz)
 
     @staticmethod
     def transform_out():
